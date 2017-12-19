@@ -283,7 +283,7 @@ void usage(void)
 // main function
 int main(int argc, char **argv)
 {
-	FILE *datafile;
+	FILE *datafile = 0;
 	hex_cfg cfg;
 	int i;
 
@@ -441,11 +441,11 @@ int main(int argc, char **argv)
 	if((i = generate(datafile, &cfg)) < 0)
 	{
 	    fprintf(stderr, "Can't generate HEX patch. ErrorCode %d\n", i);
-	    fclose(datafile);
+	    if(datafile) fclose(datafile);
 	    return 1; // FAIL
 	}
 
-	fclose(datafile);
+	if(datafile) fclose(datafile);
 
 	// create file for user output and put something in there
 	if(cfg.userfilepath)

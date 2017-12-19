@@ -11,6 +11,7 @@
 				<Option object_output="obj\Debug\" />
 				<Option type="1" />
 				<Option compiler="gcc" />
+				<Option parameters=" -llast -pABC -a0x01dc -i -u" />
 				<Compiler>
 					<Add option="-g" />
 				</Compiler>
@@ -31,13 +32,13 @@
 		<Compiler>
 			<Add option="-Wall" />
 		</Compiler>
-		<Unit filename="ArmSerial.c">
-			<Option compilerVar="CC" />
-		</Unit>
 		<Unit filename="hexfile.c">
 			<Option compilerVar="CC" />
 		</Unit>
 		<Unit filename="hexfile.h" />
+		<Unit filename="hexserial.c">
+			<Option compilerVar="CC" />
+		</Unit>
 		<Extensions>
 			<code_completion />
 			<envvars />
