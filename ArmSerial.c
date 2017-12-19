@@ -1,5 +1,5 @@
 /**************************************************************
-Version 1.05
+Version 1.06
 
 1.00 - Modifikovano tako da zadnji generisani serijski broj cuva u
 registry bazi. Serijski brojevi u bezi zavise od prefixa i
@@ -40,74 +40,87 @@ Sve zajedno: PPPPPPPPP-YYYYMMDDHHmmSS-RRRRRR
 1.05 - Dodata je -F opcija da se umjesto u registry podaci cuvaju u fajlu.
 To je bitno zbog sigurnosnih razloga kada se podaci trebaju cuvati zajedno sa HEX kodom.
 
+1.06 - Svi globalni parametri prebaceni u strukturu hex_cfg
+
 **************************************************************/
 
-#define VERSION_STRING "1.05"
+#define VERSION_STRING "1.06"
 
 // include needed header files
-#include <windows.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include "hexfile.h"
 
-// location in flash memory to store serial number at
-unsigned int address;
 
-// flag za inkrementovanje serijskog broja u registry bazi
-int increment = 1; // po defaultu se inkrementuje
+#ifndef MAX_PATH
+#define MAX_PATH 2048
+#endif
 
-// flag za update stanja u registry bazi
-int update = 0;
 
-// flag za forsiranje serijskog broja
-int force = 0;
+typedef struct hex_cfg
+{
+    // location in flash memory to store serial number at
+    unsigned int address;
 
-// vrijednost forsiranog serijskog broja
-unsigned int forced_serial = 0;
+    // flag za inkrementovanje serijskog broja u registry bazi
+    int increment; // po defaultu se inkrementuje
 
-// koristi se fajl umjesto registry baze
-int use_file = 0;
+    // flag za update stanja u registry bazi
+    int update;
 
-// putanja u registry bazi
-#define REG_PATH "SOFTWARE\\ARMSerial"
+    // flag za forsiranje serijskog broja
+    int force;
 
-// ime varijable u registry bazi
-#define REG_VALUE "lastserial"
+    // vrijednost forsiranog serijskog broja
+    unsigned int forced_serial;
 
-// array to hold serial number/datestamp
-char serialnumber[32];
+    // koristi se fajl umjesto registry baze
+    char* last_serial_file;
 
-// prefix serijskog broja
-char serialprefix[16];
+    char* datafilepath;
+	char* userfilepath;
 
-#define LAST_SERIAL_FILE ".lastserial-"
+    // array to hold serial number/datestamp
+    char serialnumber[32];
+
+    // prefix serijskog broja
+    char* serialprefix;
+} hex_cfg;
+
+
+void hex_cfg_init(hex_cfg* cfg)
+{
+    memset(cfg, 0, sizeof(hex_cfg));
+    cfg->increment = 1;
+}
 
 
 // vraca vrijednost > 0 ako je sve ok, 0 ako nema vrijednosti
 // < 0 ako je neka greska
-int get_last_file_value(char* prefix)
+int get_last_file_value(char* last_serial_file)
 {
     FILE* fp;
     int value, size;
-    char file_name[100];
+    char bkp_file_name[MAX_PATH];
 
-    strcpy(file_name, LAST_SERIAL_FILE);
-    strcat(file_name, prefix);
+    if(!last_serial_file) return -1;
 
-    fp = fopen(file_name, "rb");
+    fp = fopen(last_serial_file, "rb");
 
     if(!fp) return 0; // nema fajla, kao da je bila 0
 
     size = fread(&value, sizeof(int), 1, fp);
     fclose(fp);
 
-    if(size != sizeof(int)) return -1; // greska pri citanju
-    if(value < 0) return -1; // pogresna vrijednost, greska
+    if(size != 1) return -2; // greska pri citanju
+    if(value < 0) return -3; // pogresna vrijednost, greska
 
     // pravi se bekap fajl
-    strcat(file_name, ".bkp");
-    fp = fopen(file_name, "wb");
+    strcpy(bkp_file_name, last_serial_file);
+    strcat(bkp_file_name, ".bkp");
+    fp = fopen(bkp_file_name, "wb");
     if(fp)
     {
         fwrite(&value, sizeof(int), 1, fp);
@@ -120,17 +133,15 @@ int get_last_file_value(char* prefix)
 
 // vraca vrijednost >= 0 ako je sve ok,
 // < 0 ako je neka greska
-int set_last_file_value(char* prefix, int value)
+int set_last_file_value(char* last_serial_file, int value)
 {
     FILE* fp;
     int size;
-    char file_name[100];
 
-    strcpy(file_name, LAST_SERIAL_FILE);
-    strcat(file_name, prefix);
+    if(!last_serial_file) return -4;
 
-    fp = fopen(file_name, "wb");
-    if(!fp) return -1; // greska
+    fp = fopen(last_serial_file, "wb");
+    if(!fp) return -5; // greska
 
     size = fwrite(&value, sizeof(int), 1, fp);
     fclose(fp);
@@ -138,136 +149,38 @@ int set_last_file_value(char* prefix, int value)
     {
         // upis nije uspio, brisem fajl
         printf("Upis nije uspio: upisano %d a treba %d bajta, brisem fajl\n", size, 1);
-        unlink(file_name);
-        return -1;
+        unlink(last_serial_file);
+        return -6;
     }
     return 0; // ok
 }
 
 
-// vraca vrijednost > 0 ako je sve ok, 0 ako nema vrijednosti
-// < 0 ako je neka greska
-int get_last_reg_value(char* prefix)
-{
-    char regpath[100];
-	unsigned long r;
-	unsigned long datasize, type;
-	unsigned long value;
-	HKEY key;
-
-	// formira se registry path
-	strcpy(regpath, REG_PATH);
-	strcat(regpath, "\\");
-	strcat(regpath, prefix);
-
-	r = RegOpenKeyEx(
-		HKEY_LOCAL_MACHINE,
-		regpath,
-		REG_OPTION_NON_VOLATILE,
-		KEY_ALL_ACCESS,
-		&key);
-
-    if(r) return 0; // nije uspjelo -- valjda ne postoji taj kljuc u ragistry bazi
-
-	// path postoji -- treba samo procitati vrijednost
-	datasize = 4;
-
-	r = RegQueryValueEx(
-		key,
-		REG_VALUE,
-		0,
-		&type,
-		(unsigned char*)&value,
-		&datasize);
-
-    RegCloseKey(key);
-
-	if(r || (datasize != 4) || (type != REG_DWORD)) return -1;
-    return (int) value;
-}
-
-
-
-// vraca vrijednost >= 0 ako je sve ok,
-// < 0 ako je neka greska
-int set_last_reg_value(char* prefix, int value)
-{
-    char regpath[100];
-	unsigned long r;
-	unsigned long disp;
-	HKEY key;
-
-	// formira se registry path
-	strcpy(regpath, REG_PATH);
-	strcat(regpath, "\\");
-	strcat(regpath, prefix);
-
-	r = RegOpenKeyEx(
-		HKEY_LOCAL_MACHINE,
-		regpath,
-		REG_OPTION_NON_VOLATILE,
-		KEY_ALL_ACCESS,
-		&key);
-
-	if(r) // nije uspjelo -- valjda ne postoji taj kljuc u ragistry bazi
-	{
-		// kraira se kljuc u bazi
-		r = RegCreateKeyEx(
-			HKEY_LOCAL_MACHINE,
-			regpath,
-			0,
-			"", // address of class string
-			REG_OPTION_NON_VOLATILE,
-			KEY_ALL_ACCESS,
-			0,
-			&key,
-			&disp);
-
-		if(r) return -1; // ako ni ovo ne uspije odustajem
-	}
-
-	r = RegSetValueEx(
-		key,
-		REG_VALUE,
-		0,
-		REG_DWORD,
-		(unsigned char*)&value,
-		4);
-
-    RegCloseKey(key);
-
-    if(r) return -1; // ako nije uspjelo ...
-    return 0;
-}
-
 
 // function to generate the actual serial number and put it into
 // an intel hex record ready for programming
 // outputfile = handle of file to write hex record
-int generate(FILE *outputfile)
+int generate(FILE *outputfile, hex_cfg* cfg)
 {
 	char hexrecord[100];
 	unsigned long now;
 	int  serial;
 	struct tm* timedate;
 
-    if(use_file) serial = get_last_file_value(serialprefix);
-    else         serial = get_last_reg_value(serialprefix);
+    serial = get_last_file_value(cfg->last_serial_file);
     // zadnji serijski broj je u serial
 
-    if(serial < 0) return -1; // greska
-	if(force) serial = forced_serial; // ako se forsira serial
-    else if(increment) serial++; // za 1 veci
-
+    if(serial < 0) return serial; // greska
+	if(cfg->force) serial = cfg->forced_serial; // ako se forsira serial
+    else if(cfg->increment) serial++; // za 1 veci
 
     // ako se inkrementira ili ako se forsira i apdejtuje
 	// upisuje se nova vrijednost u registry
-	if(increment || (force && update))
+	if(cfg->increment || (cfg->force && cfg->update))
 	{
 		int r;
-		if(use_file) r = set_last_file_value(serialprefix, serial);
-		else         r = set_last_reg_value(serialprefix, serial);
-		if(r < 0) return -1; // ako nije uspjelo ...
+		r = set_last_file_value(cfg->last_serial_file, serial);
+		if(r < 0) return r; // ako nije uspjelo ...
 	}
 
 	// get the current time
@@ -277,9 +190,9 @@ int generate(FILE *outputfile)
 
 	// store current time in serial number array
 	sprintf(
-		serialnumber,
+		cfg->serialnumber,
 		"%s-%04d%02d%02d%02d%02d%02d-%06u",
-		serialprefix,
+		cfg->serialprefix,
 		1900 + timedate->tm_year,
 		1 + timedate->tm_mon,
 		timedate->tm_mday,
@@ -290,9 +203,9 @@ int generate(FILE *outputfile)
 
 	// create a hex record holding the serial number
 	hexfile_generate_record(
-		address,
-		strlen(serialnumber) + 1,
-		serialnumber,
+		cfg->address,
+		strlen(cfg->serialnumber) + 1, // ovaj 1 jer se koduje i terminacioni \0 karakter
+		cfg->serialnumber,
 		hexrecord);
 
 	// output the hex record
@@ -302,161 +215,189 @@ int generate(FILE *outputfile)
 }
 
 
-// function to remove carriage returns and newlines from the
-// end of a line
-void strip_newline(char *text)
+void usage(void)
 {
-	char *ptr = text;
-	while (*ptr)
-	{
-		if (*ptr == '\n' || *ptr == '\r') *ptr = '\0';
-		ptr++;
-	}
+    fprintf(stderr,"HexSerial, version %s, compiled at %s\n", VERSION_STRING, __DATE__);
+	fprintf(stderr,"Usage: -a n -l f -h f -p f [-t f] [-n] [-u] [-f n]\n");
+	fprintf(stderr,"Options: -n     don't increment sequence number\n");
+	fprintf(stderr,"         -u     update last serial file with forced value\n");
+	fprintf(stderr,"         -a n   serial string address in HEX file in HEX notation with 0x prefix\n");
+	fprintf(stderr,"         -f n   force sequence number to n\n");
+	fprintf(stderr,"         -l f   last serial file\n");
+	fprintf(stderr,"         -h f   output hex file\n");
+	fprintf(stderr,"         -t f   output text file\n");
+	fprintf(stderr,"         -p f   serial prefix\n");
+	fprintf(stderr,"\n");
 }
+
 
 // main function
 int main(int argc, char **argv)
 {
-	FILE *commandfile;
 	FILE *datafile;
-	FILE *userfile;
-	char datafilepath[2000];
-	char userfilepath[2000];
-	char serialaddress[16];
-	int ret_code = 1; // OK
-	int print = 0;
-	int line_count; // broji linije u komandnom fajlu
+	hex_cfg cfg;
+	int i;
 
-	// if we didn't receive two arguments then we can't do anything
-	if(argc < 2)
+	hex_cfg_init(&cfg);
+
+	// if we didn't receive 3 arguments then we can't do anything (-f -u -l)
+	if(argc < 3)
 	{
-		fprintf(stderr,"ArmSerial, version %s, build date: %s\n",VERSION_STRING,__DATE__);
-		fprintf(stderr,"Usage: ArmSerial path_to_command_file [options...]\n");
-		fprintf(stderr,"Oprions: -i     invert return code (return 0 if OK, 1 if FAIL)\n");
-		fprintf(stderr,"         -n     don't increment sequence number in registry\n");
-		fprintf(stderr,"         -p     print user-file to stdout\n");
-		fprintf(stderr,"         -f n   force sequence number to n\n");
-		fprintf(stderr,"         -u     update registry database with forced value\n");
-		fprintf(stderr,"         -F     use file instead of registry\n");
-		fprintf(stderr,"\n");
-		fprintf(stderr,"Command file contain 4 lines with 1 parameter per line:\n");
-		fprintf(stderr,"absolute path to hex file\n");
-		fprintf(stderr,"absolute path to user file\n");
-		fprintf(stderr,"serial string prefix (up to 5 chars)\n");
-		fprintf(stderr,"serial string address in HEX file (in HEX notation)\n");
-		fprintf(stderr,"Line starting with '#' or ';' is treated as comment\n");
-		return ! ret_code; // FAIL
+	    usage();
+		return 1; // FAIL
 	}
-	while(argc > 2)
+
+	for(i = 0; i < argc; i++)
 	{
-		if(argv[argc - 1][0] == '-')
+		if(argv[i][0] == '-')
 		{
-			if(argv[argc - 1][1] == 'i') ret_code = 0; // invertovano
-			else if(argv[argc - 1][1] == 'n') increment = 0; // nema inkrementovanja
-			else if(argv[argc - 1][1] == 'p') print = 1; // print na stdout
-			else if(argv[argc - 1][1] == 'F') use_file = 1; // file umjesto registry
-			else if(argv[argc - 1][1] == 'f') // force
+			if(argv[i][1] == 'n') cfg.increment = 0; // nema inkrementovanja
+			else if(argv[i][1] == 'l')
 			{
-				if(argv[argc - 1][2] != 0) // -f<serial>
+			    if(argv[i][2] != 0) // -l<file>
 				{
-					forced_serial = strtoul(&argv[argc - 1][2],0,0);
+					cfg.last_serial_file = &argv[i][2];
 				}
-				else if(argv[argc][0] != '-') // -f <serial>
+				else if(i + 1 < argc && argv[i + 1][0] != '-') // -l <file>
 				{
-					forced_serial = strtoul(argv[argc],0,0);
-					argc--;
+					cfg.last_serial_file = argv[i + 1];
+					i++;
 				}
-				if(forced_serial && forced_serial != 0xffffffffUL) force = 1;
 			}
-			else if(argv[argc - 1][1] == 'u') update = 1;
+			else if(argv[i][1] == 'h')
+			{
+			    if(argv[i][2] != 0) // -h<file>
+				{
+					cfg.datafilepath = &argv[i][2];
+				}
+				else if(i + 1 < argc && argv[i + 1][0] != '-') // -h <file>
+				{
+					cfg.datafilepath = argv[i + 1];
+					i++;
+				}
+			}
+			else if(argv[i][1] == 't')
+			{
+			    if(argv[i][2] != 0) // -t<file>
+				{
+					cfg.userfilepath = &argv[i][2];
+				}
+				else if(i + 1 < argc && argv[i + 1][0] != '-') // -t <file>
+				{
+					cfg.userfilepath = argv[i + 1];
+					i++;
+				}
+			}
+			else if(argv[i][1] == 'a')
+			{
+			    if(strncmp(argv[i], "-a0x", 4) == 0) // -a0x<addr>
+			    {
+					sscanf(argv[i],"-a0x%x",(unsigned int*)&cfg.address);
+				}
+				else if(argv[i][2] != 0) // -a<addr>
+				{
+				    sscanf(argv[i],"-a%d",(unsigned int*)&cfg.address);
+				}
+				else if(i + 1 < argc && argv[i + 1][0] != '-') // -a <file>
+				{
+				    if(strncmp(argv[i + 1], "0x", 2) == 0)
+                        sscanf(argv[i + 1],"0x%x",(unsigned int*)&cfg.address);
+                    else sscanf(argv[i + 1],"%d",(unsigned int*)&cfg.address);
+					i++;
+				}
+			}
+			else if(argv[i][1] == 'p')
+			{
+			    if(argv[i][2] != 0) // -p<file>
+				{
+					cfg.serialprefix = &argv[i][2];
+					if(strlen(cfg.serialprefix) > 9) cfg.serialprefix[9] = 0; // ogranicava se prefix na 9 karaktera
+				}
+				else if(i + 1 < argc && argv[i + 1][0] != '-') // -p <file>
+				{
+					cfg.serialprefix = argv[i + 1];
+					if(strlen(cfg.serialprefix) > 9) cfg.serialprefix[9] = 0; // ogranicava se prefix na 9 karaktera
+					i++;
+				}
+			}
+			else if(argv[i][1] == 'f') // force
+			{
+				if(argv[i][2] != 0) // -f<serial>
+				{
+					cfg.forced_serial = strtoul(&argv[i][2],0,0);
+				}
+				else if(i + 1 < argc && argv[i + 1][0] != '-') // -f <serial>
+				{
+					cfg.forced_serial = strtoul(argv[i + 1],0,0);
+					i++;
+				}
+				if(cfg.forced_serial && cfg.forced_serial != 0xffffffffUL) cfg.force = 1;
+			}
+			else if(argv[i][1] == 'u') cfg.update = 1;
 			// nepoznata opcija se ignorise
 		}
-		argc--;
 	}
 
-	// try to open the command file passed in the first argument
-	commandfile = fopen(argv[1], "r");
-	if (!commandfile) return ! ret_code;
-
-	line_count = 0;
-
-	while(!feof(commandfile))
+	if(cfg.address == 0)
 	{
-		char read_buffer[2000]; // za citanje komandnog fajla
-
-		if(fgets(read_buffer, 2000, commandfile) == NULL)
-		{
-			fclose(commandfile);
-			return ! ret_code;
-		}
-
-		// da li je komentar
-		if(read_buffer[0] == '#') continue;
-		if(read_buffer[0] == ';') continue;
-
-		switch(line_count)
-		{
-		case 0: // datafilepath
-			// try to read in the path to the file to create with hex records
-			memcpy(datafilepath, read_buffer, 2000);
-			line_count++;
-			break;
-
-		case 1: // userfilepath
-			// try to read in the path to the user output file to create
-			memcpy(userfilepath, read_buffer, 2000);
-			line_count++;
-			break;
-
-		case 2: // try to read in the serial prefix
-			memcpy(serialprefix, read_buffer, 16);
-			serialprefix[9] = 0; // ogranicava se prefix na 9 karaktera
-			line_count++;
-			break;
-
-		case 3: // try to read in the serial address
-			memcpy(serialaddress, read_buffer, 16);
-			line_count++;
-			break;
-
-		default: break;
-		}
+	    fprintf(stderr, "Invalid patch address\n");
+	    return 1;
 	}
 
-	// we are done with the command file
-	fclose(commandfile);
+	if(cfg.datafilepath == 0)
+	{
+	    fprintf(stderr, "Hex file path invalid or missing\n");
+	    return 1;
+	}
 
-	// get rid of junk we don't need
-	strip_newline(datafilepath);
-	strip_newline(userfilepath);
-	strip_newline(serialprefix);
-	strip_newline(serialaddress);
+	if(cfg.last_serial_file == 0)
+	{
+	    fprintf(stderr, "Last serial file path invalid or missing\n");
+	    return 1;
+	}
 
-	address = 0;
-	sscanf(serialaddress,"0x%x",(unsigned int*)&address);
-	if(address == 0) return ! ret_code;
+	if(cfg.serialprefix == 0)
+	{
+	    fprintf(stderr, "Serial prefix invalid or missing\n");
+	    return 1;
+	}
 
 	// create file for hex records and generate records
-	datafile = fopen(datafilepath, "wb");
-	if(!datafile) return ! ret_code;
+	datafile = fopen(cfg.datafilepath, "wb");
+	if(!datafile)
+	{
+	    fprintf(stderr, "Can't open file %s\n", cfg.datafilepath);
+	    return 1;
+	}
 
-	if(generate(datafile) == -1) return ! ret_code; // FAIL
+	if((i = generate(datafile, &cfg)) < 0)
+	{
+	    fprintf(stderr, "Can't generate HEX patch. ErrorCode %d\n", i);
+	    return 1; // FAIL
+	}
 
 	fclose(datafile);
 
 	// create file for user output and put something in there
-	userfile = fopen(userfilepath, "w");
-	if(!userfile) return ! ret_code;
+	if(cfg.userfilepath)
+	{
+        FILE* userfile = fopen(cfg.userfilepath, "w");
+        if(!userfile)
+        {
+            fprintf(stderr, "Can't open file %s\n", cfg.userfilepath);
+            return 1;
+        }
 
-	// generate some feedback for the user
-	// in this case we tell the user what the serial number generated
-	// is so it can be noted and maybe put on a sticker somewhere
-	fprintf(userfile, "%s", serialnumber);
-	fclose(userfile);
+        // generate some feedback for the user
+        // in this case we tell the user what the serial number generated
+        // is so it can be noted and maybe put on a sticker somewhere
+        fprintf(userfile, "%s\n", cfg.serialnumber);
+        fclose(userfile);
+	}
 
 	// if requested, print serial to stdio
-	if(print) printf("%s\n",serialnumber);
+	printf("%s\n", cfg.serialnumber);
 
 	// done
-	return ret_code;
+	return 0;
 }
