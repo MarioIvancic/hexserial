@@ -4,41 +4,32 @@
 #include <string.h>
 #include <ctype.h>
 
+
+static const char hex_chars[] = "0123456789ABCDEF";
+
+
 // func: hex_highchar
 // desc: returns a character containing the high nibble of
 // a value. e.g. A2H -> 'A'
 // passed: value
 // returns: character
-unsigned char hex_highchar(unsigned char value)
-{
-	char buffer[6];
-	sprintf(buffer, "%2.2X", value);
-	return buffer[0];
-}
+#define hex_highchar(value) (hex_chars[((value) >> 4) & 0x0f])
+
 
 // func: hex_lowchar
 // desc: returns a character containing the low nibble of
 // a value. e.g. A2H -> '2'
 // passed: value
 // returns: character
-unsigned char hex_lowchar(unsigned char value)
-{
-	char buffer[6];
-	sprintf(buffer, "%2.2X", value);
-	return buffer[1];
-}
+#define hex_lowchar(value) (hex_chars[(value) & 0x0f])
+
 
 // func: hex_char16
 // desc: returns a character containing a specific nibble of a
 // 16-bit value. e.g. A2B3H -> pos 0 = 'A', pos 3 = '3'
 // passed: value and nibble number 0 - 3
 // returns: character
-unsigned char hex_char16(unsigned int value, int pos)
-{
-	char buffer[12];
-	sprintf(buffer, "%4.4X", value);
-	return buffer[pos];
-}
+#define hex_char16(value, pos) (hex_chars[((value) >> (4 * (3 - (pos)))) & 0x0f])
 
 // func: hex_calculate_value
 // desc: takes two chars such as '4' and 'A' and converts them to the
