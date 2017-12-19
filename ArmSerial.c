@@ -1,6 +1,5 @@
 /**************************************************************
-Serial Number/Datestamp Generation
-Version 1.02
+Version 1.03
 
 1.00 - Modifikovano tako da zadnji generisani serijski broj cuva u 
 registry bazi. Serijski brojevi u bezi zavise od prefixa i 
@@ -12,18 +11,24 @@ bez inkrementovanja brojaca u registry bazi
 1.02 - Dodat -p parametar na komandnoj liniji za printanje serial 
 stringa na stdio
 
-Serijski broj se sastoji od rednog broja, timestamp stringa i proizvoljnog prefixa.
-- Prefix moze biti bilo koji string bez praznina do 5 karaktera duzine. 
-  Ako je prefix duzi odsjeca se na 5 karaktera.
-- Time stamp sadrzi 14 ASCII cifara i ima format YYYYMMDDHHMMSS.
-- Redni broj se sastoji od 10 decimalnih cifara i moze biti u opsegu od 0000000001 do 4294967295. 
+1.03 - Dodat -f parametar na komandnoj liniji da se forsira serijski broj
+Dodat -u parametar na komandnoj liniji da se serijski broj dat 
+sa -f spremi u registry bazu. Koristi se samo zajedno sa -f
 
-  Sve zajedno: PPPPP-YYYYMMDDHHmmSS-RRRRRRRRRR
+Serijski broj se sastoji od rednog broja, timestamp stringa i proizvoljnog
+prefixa.
+- Prefix moze biti bilo koji string bez praznina do 5 karaktera duzine. Ako je
+prefix duzi odsjeca se na 5 karaktera.
+- Time stamp sadrzi 14 ASCII cifara i ima format YYYYMMDDHHMMSS.
+- Redni broj se sastoji od 10 decimalnih cifara i moze biti u opsegu od 
+0000000001 do 4294967295. 
+Sve zajedno: PPPPP-YYYYMMDDHHmmSS-RRRRRRRRRR
 
 **************************************************************/
 
-#define VERSION_STRING "1.02"
+#define VERSION_STRING "1.03"
 
+// include needed header files
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
@@ -35,6 +40,15 @@ unsigned long address;
 
 // flag za inkrementovanje serijskog broja u registry bazi
 int increment = 1; // po defaultu se inkrementuje
+
+// flag za update stanja u registry bazi
+int update = 0;
+
+// flag za forsiranje serijskog broja
+int force = 0;
+
+// vrijednost forsiranog serijskog broja
+unsigned int forced_serial = 0;
 
 // putanja u registry bazi
 #define REG_PATH "SOFTWARE\\ARMSerial"
@@ -90,7 +104,8 @@ int generate(FILE *outputfile)
 			return -1;
 		}
 
-		serial = 1;
+		if(force && update) serial = forced_serial;
+		else serial = 1;
 		r = RegSetValueEx(
 			key,
 			REG_VALUE,
@@ -128,14 +143,19 @@ int generate(FILE *outputfile)
 		// zadnji serijski broj je u serial
 		if(increment) serial++; // za 1 veci
 
+		// ako se forsira serial
+		if(force) serial = forced_serial;
+
+		// ako se inkrementira ili ako se forsira i apdejtuje 
 		// upisuje se nova vrijednost u registry
-		r = RegSetValueEx(
-			key,
-			REG_VALUE,
-			0,
-			REG_DWORD,
-			(unsigned char*)&serial,
-			4);
+		if(!force || (force && update))
+			r = RegSetValueEx(
+				key,
+				REG_VALUE,
+				0,
+				REG_DWORD,
+				(unsigned char*)&serial,
+				4);
 
 		RegCloseKey(key);
 
@@ -202,13 +222,15 @@ int main(int argc, char **argv)
 
 	// if we didn't receive two arguments then we can't do
 	// anything
-	if(argc < 2 || argc > 5)
+	if(argc < 2)
 	{
 		fprintf(stderr,"ArmSerial, version %s, build date: %s\n",VERSION_STRING,__DATE__);
-		fprintf(stderr,"Usage: ArmSerial path_to_command_file [option[ option]]\n");
+		fprintf(stderr,"Usage: ArmSerial path_to_command_file [options...]\n");
 		fprintf(stderr,"Oprions: -i     invert return code (return 0 if OK, 1 if FAIL)\n");
 		fprintf(stderr,"         -n     don't increment sequence number in registry\n");
 		fprintf(stderr,"         -p     print user-file to stdout\n");
+		fprintf(stderr,"         -f n   force sequence number to n\n");
+		fprintf(stderr,"         -u     update registry database with forced value\n");
 		fprintf(stderr,"\n");
 		fprintf(stderr,"Command file contain 4 lines with 1 parameter per line:\n");
 		fprintf(stderr,"absolute path to hex file\n");
@@ -224,6 +246,20 @@ int main(int argc, char **argv)
 			if(argv[argc - 1][1] == 'i') ret_code = 0; // invertovano
 			else if(argv[argc - 1][1] == 'n') increment = 0; // nema inkrementovanja
 			else if(argv[argc - 1][1] == 'p') print = 1; // print na stdout
+			else if(argv[argc - 1][1] == 'f') // force
+			{
+				if(argv[argc - 1][2] != 0) // -f<serial>
+				{
+					forced_serial = strtoul(&argv[argc - 1][2],0,0);
+				}
+				else if(argv[argc][0] != '-') // -f <serial>
+				{
+					forced_serial = strtoul(argv[argc],0,0);
+					argc--;
+				}
+				if(forced_serial && forced_serial != 0xffffffffUL) force = 1;
+			}
+			else if(argv[argc - 1][1] == 'u') update = 1;
 			// nepoznata opcija se ignorise
 		}
 		argc--;
@@ -291,8 +327,9 @@ int main(int argc, char **argv)
 	if(!userfile) return ! ret_code;
 
 	// generate some feedback for the user
-	// in this case we tell the user what the serial number is generated
-	// so it can be noted and maybe put on a sticker somewhere
+	// in this case we tell the user what the serial number generated
+	// is so it can be noted and maybe put on a sticker somewhere
+//	fprintf(userfile, "Serial Number: %s", serialnumber);
 	fprintf(userfile, "%s", serialnumber);
 	fclose(userfile);
 
