@@ -169,7 +169,8 @@ int set_last_file_value(char* last_serial_file, int value)
         // upis nije uspio, brisem fajl
         //printf("Upis nije uspio: upisano %d a treba %d bajta, brisem fajl\n", size, 1);
         //fprintf(stderr, "Write failed: written %d of %d bytes, file removed (see backup file)\n", size, 1);
-        unlink(last_serial_file);
+        //unlink(last_serial_file);
+        remove(last_serial_file);
         return -6;
     }
     return 0; // ok
@@ -376,7 +377,7 @@ int main(int argc, char **argv)
 				if(cfg.sequence && cfg.sequence != 0xffffffffUL) cfg.force = 1;
 			}
 			else if(argv[i][1] == 'u') cfg.update = 1;
-			else if(argv[i][1] == '?') // help
+			else if(argv[i][1] == '?' || strcmp(argv[i], "--help") == 0) // help
 			{
 				usage();
 				return 0;
