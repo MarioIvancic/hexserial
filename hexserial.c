@@ -66,6 +66,7 @@ nezavisni su za svaki prefix.
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <errno.h>
 #include "hexfile.h"
 
 
@@ -124,7 +125,8 @@ int get_last_file_value(char* last_serial_file)
 
     fp = fopen(last_serial_file, "rb");
 
-    if(!fp) return 0; // nema fajla, kao da je bila 0
+    // can't open file for reading, nema fajla, kao da je bila 0
+    if(!fp) return 0;
 
     size = fread(&value, sizeof(int), 1, fp);
     fclose(fp);
@@ -146,20 +148,38 @@ int set_last_file_value(char* last_serial_file, int value)
 
     if(!last_serial_file) return -4;
 
-    // pravi se bekap fajl
+    // make backup file
     strcpy(bkp_file_name, last_serial_file);
     strcat(bkp_file_name, ".bkp");
+
     fp2 = fopen(bkp_file_name, "wb");
     if(!fp2) return -5; // greska
+
     fp = fopen(last_serial_file, "r+b");
-    if(!fp) { fclose(fp2); return -5; } // greska
-    if(fread(&v, sizeof(int), 1, fp) != 1) { fclose(fp2); fclose(fp); return -6; }
-    if(fwrite(&v, sizeof(int), 1, fp2) != 1) { fclose(fp2); fclose(fp); return -6; }
+    if(!fp)
+    {
+        // can't open last_serial_file file
+        fprintf(stderr, "Can't open file '%s' for 'r+b', errno: %d\n", last_serial_file, errno);
+        fclose(fp2);
+        return -6;
+    }
+
+    if(fread(&v, sizeof(int), 1, fp) != 1)
+    {
+        fclose(fp2);
+        fclose(fp);
+        return -7;
+    }
+
+    if(fwrite(&v, sizeof(int), 1, fp2) != 1)
+    {
+        fclose(fp2);
+        fclose(fp);
+        return -8;
+    }
+
     fclose(fp2);
 
-
-    //fp = fopen(last_serial_file, "wb");
-    //if(!fp) return -5; // greska
     rewind(fp);
 
     size = fwrite(&value, sizeof(int), 1, fp);
@@ -171,7 +191,7 @@ int set_last_file_value(char* last_serial_file, int value)
         //fprintf(stderr, "Write failed: written %d of %d bytes, file removed (see backup file)\n", size, 1);
         //unlink(last_serial_file);
         remove(last_serial_file);
-        return -6;
+        return -9;
     }
     return 0; // ok
 }
