@@ -1,4 +1,7 @@
 /**************************************************************
+1.2 - Changed last_sequence_file file format from binary to ASCII.
+      Old binary files can still be read.
+
 1.1 - promjenjeno ime ovog fajla iz ArmSerial.c u hexserial.c
     - promjenjeno ponasanje: ako hex i txt fajlovi nisu navedeni program nastavlja dalje ali se ne zali
     - promjenjeno ponasanja: ako prefix nije naveden format postaje YYYYMMDDHHmmss-RRRRRR
@@ -59,7 +62,7 @@ nezavisni su za svaki prefix.
 
 **************************************************************/
 
-#define VERSION_STRING "1.1"
+#define VERSION_STRING "1.2"
 
 // include needed header files
 #include <stdio.h>
@@ -67,6 +70,8 @@ nezavisni su za svaki prefix.
 #include <string.h>
 #include <time.h>
 #include <errno.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 #include "hexfile.h"
 
 
@@ -82,28 +87,22 @@ typedef struct hex_cfg
     // location in flash memory to store serial number at
     unsigned int address;
 
-    // flag za inkrementovanje serijskog broja u registry bazi
-    int increment; // po defaultu se inkrementuje
+    // action flags
+    int increment, update, force;
 
-    // flag za update stanja u registry bazi
-    int update;
-
-    // flag za forsiranje serijskog broja
-    int force;
-
-    // vrijednost forsiranog serijskog broja
+    // forced sequence number
     unsigned int sequence;
 
-    // koristi se fajl umjesto registry baze
+    // the name of last sequence file
     char* last_serial_file;
 
     char* datafilepath;
 	char* userfilepath;
 
-    // array to hold serial number/datestamp
+    // array to hold serial number/timestamp
     char serialnumber[MAX_SERIAL_SIZE];
 
-    // prefix serijskog broja
+    // serial number prefix
     char* serialprefix;
 } hex_cfg;
 
@@ -114,84 +113,103 @@ void hex_cfg_init(hex_cfg* cfg)
 }
 
 
-// vraca vrijednost > 0 ako je sve ok, 0 ako nema vrijednosti
-// < 0 ako je neka greska
-int get_last_file_value(char* last_serial_file)
+// returns sequence number >= 0 from binary or ascii file
+// returns 0 if there is no file of file is empty
+// returns negative error code on error
+int get_sequence_number(char* last_serial_file)
 {
     FILE* fp;
-    int value, size;
+    int value, size, err;
+    struct stat stat_buf;
+    char buff[32];
 
     if(!last_serial_file) return -1;
 
+    err = stat(last_serial_file, &stat_buf);
+    if(err)
+    {
+        // stat failed
+
+        // if there is no file return 0 as sequence number
+        if(errno == ENOENT) return 0;
+        // it's some other error, return error code
+        perror("Error in get_sequence_number()");
+        return -2;
+    }
+
+    // if file size is 0 return 0 as sequence number
+    if(stat_buf.st_size == 0) return 0;
+
+    // if file size is too big return error code
+    if(stat_buf.st_size > 31) return -2;
+    if(stat_buf.st_size < sizeof(int)) return -2;
+
+    // open file
     fp = fopen(last_serial_file, "rb");
+    if(!fp)
+    {
+        perror("Error in get_sequence_number()");
+        return -2;
+    }
 
-    // can't open file for reading, nema fajla, kao da je bila 0
-    if(!fp) return 0;
-
-    size = fread(&value, sizeof(int), 1, fp);
+    size = fread(buff, 1, stat_buf.st_size, fp);
     fclose(fp);
 
-    if(size != 1) return -2; // greska pri citanju
-    if(value < 0) return -3; // pogresna vrijednost, greska
+    if(size != stat_buf.st_size)
+    {
+        perror("Error in get_sequence_number()");
+        return -3;
+    }
+
+    buff[size] = 0;
+
+    // now we have to see is it binary or ascii file
+    if(size <= sizeof(int) + 1) value = *(int*)buff;
+    else value  = strtol(buff, 0, 10);
 
     return value;
 }
 
 
-// vraca vrijednost >= 0 ako je sve ok,
-// < 0 ako je neka greska
-int set_last_file_value(char* last_serial_file, int value)
+// backup old sequence number and set new one
+// returns 0 or negative error code
+int set_sequence_number(char* last_serial_file, int old_value, int new_value)
 {
-    FILE *fp, *fp2;
+    FILE *fp;
     int size, v;
     char bkp_file_name[MAX_PATH];
 
-    if(!last_serial_file) return -4;
+    if(!last_serial_file) return -1;
 
     // make backup file
     strcpy(bkp_file_name, last_serial_file);
     strcat(bkp_file_name, ".bkp");
 
-    fp2 = fopen(bkp_file_name, "wb");
-    if(!fp2) return -5; // greska
+    fp = fopen(bkp_file_name, "wb");
+    if(!fp)
+    {
+        perror("Error in set_sequence_number()");
+        return -2;
+    }
+    size = fprintf(fp, "%010d", old_value);
+    fclose(fp);
 
-    fp = fopen(last_serial_file, "r+b");
+    fp = fopen(last_serial_file, "wb");
     if(!fp)
     {
         // can't open last_serial_file file
-        fprintf(stderr, "Can't open file '%s' for 'r+b', errno: %d\n", last_serial_file, errno);
-        fclose(fp2);
-        return -6;
+        //fprintf(stderr, "Can't open file '%s' for 'r+b', errno: %d\n", last_serial_file, errno);
+        perror("Error in set_sequence_number()");
+        return -2;
     }
 
-    if(fread(&v, sizeof(int), 1, fp) != 1)
-    {
-        fclose(fp2);
-        fclose(fp);
-        return -7;
-    }
-
-    if(fwrite(&v, sizeof(int), 1, fp2) != 1)
-    {
-        fclose(fp2);
-        fclose(fp);
-        return -8;
-    }
-
-    fclose(fp2);
-
-    rewind(fp);
-
-    size = fwrite(&value, sizeof(int), 1, fp);
+    size = fprintf(fp, "%010d", new_value);
     fclose(fp);
-    if(size != 1)
+    if(size != 10)
     {
-        // upis nije uspio, brisem fajl
-        //printf("Upis nije uspio: upisano %d a treba %d bajta, brisem fajl\n", size, 1);
-        //fprintf(stderr, "Write failed: written %d of %d bytes, file removed (see backup file)\n", size, 1);
-        //unlink(last_serial_file);
+        // fprintf() failed
         remove(last_serial_file);
-        return -9;
+        return -3;
     }
     return 0; // ok
 }
@@ -204,25 +222,27 @@ int set_last_file_value(char* last_serial_file, int value)
 int generate(FILE *outputfile, hex_cfg* cfg)
 {
 	char hexrecord[MAX_SERIAL_SIZE * 3 + 20];
-	unsigned long now;
 	struct tm* timedate;
+	int old_seq, new_seq;
+	time_t now;
 
-	if(!cfg->force) cfg->sequence = get_last_file_value(cfg->last_serial_file);
-    // zadnji serijski broj je u sequence
-    if(cfg->sequence < 0) return cfg->sequence; // greska
-    if(cfg->increment) cfg->sequence++; // za 1 veci
+	if(cfg->force) old_seq = cfg->sequence;
+	else old_seq = get_sequence_number(cfg->last_serial_file);
+
+    if(old_seq < 0) return old_seq; // error
+
+    new_seq = old_seq;
+    if(cfg->increment) new_seq = old_seq + 1;
 
     // ako se apdejtuje upisuje se nova vrijednost u registry
 	if(cfg->update)
 	{
-		int r;
-		r = set_last_file_value(cfg->last_serial_file, cfg->sequence);
-		if(r < 0) return r; // ako nije uspjelo ...
+		int err = set_sequence_number(cfg->last_serial_file, old_seq, new_seq);
+		if(err < 0) return err;
 	}
 
 	// get the current time
-	time((time_t *)&now);
-
+	now = time(0);
 	timedate = localtime(&now);
 
 	// store current time in serial number array
@@ -238,7 +258,7 @@ int generate(FILE *outputfile, hex_cfg* cfg)
             timedate->tm_hour,
             timedate->tm_min,
             timedate->tm_sec,
-            cfg->sequence);
+            new_seq);
 	}
 	else
 	{
@@ -251,17 +271,14 @@ int generate(FILE *outputfile, hex_cfg* cfg)
             timedate->tm_hour,
             timedate->tm_min,
             timedate->tm_sec,
-            cfg->sequence);
+            new_seq);
 	}
 
 	// create a hex record holding the serial number
 	if(outputfile)
 	{
-        hexfile_generate_record(
-            cfg->address,
-            strlen(cfg->serialnumber) + 1, // ovaj 1 jer se koduje i terminacioni \0 karakter
-            cfg->serialnumber,
-            hexrecord);
+        hexfile_generate_record( cfg->address, strlen(cfg->serialnumber) + 1,
+            cfg->serialnumber, hexrecord);
 
         // output the hex record
         fprintf(outputfile, "%s\n", hexrecord);
@@ -314,7 +331,7 @@ int main(int argc, char **argv)
 	{
 		if(argv[i][0] == '-')
 		{
-			if(argv[i][1] == 'i') cfg.increment = 1; // inkrementovanje
+			if(argv[i][1] == 'i') cfg.increment = 1;
 			else if(argv[i][1] == 'l')
 			{
 			    if(argv[i][2] != 0) // -l<file>
@@ -374,12 +391,10 @@ int main(int argc, char **argv)
 			    if(argv[i][2] != 0) // -p<file>
 				{
 					cfg.serialprefix = &argv[i][2];
-					//if(strlen(cfg.serialprefix) > 9) cfg.serialprefix[9] = 0; // ogranicava se prefix na 9 karaktera
 				}
 				else if(i + 1 < argc && argv[i + 1][0] != '-') // -p <file>
 				{
 					cfg.serialprefix = argv[i + 1];
-					//if(strlen(cfg.serialprefix) > 9) cfg.serialprefix[9] = 0; // ogranicava se prefix na 9 karaktera
 					i++;
 				}
 			}
@@ -402,7 +417,8 @@ int main(int argc, char **argv)
 				usage();
 				return 0;
 			}
-			else ;// nepoznata opcija se ignorise
+			// ignoring unknown command line options
+			else ;
 		}
 	}
 
@@ -412,29 +428,13 @@ int main(int argc, char **argv)
 	    return 1;
 	}
 
-    /*
-	if(cfg.datafilepath == 0)
-	{
-	    fprintf(stderr, "Hex file path invalid or missing\n");
-	    return 1;
-	}
-	*/
-
-	if(cfg.last_serial_file == 0)
+    if(cfg.last_serial_file == 0)
 	{
 	    fprintf(stderr, "Last sequence file path invalid or missing\n");
 	    return 1;
 	}
 
-    /*
-	if(cfg.serialprefix == 0)
-	{
-	    fprintf(stderr, "Serial prefix invalid or missing\n");
-	    return 1;
-	}
-	*/
-
-	if(cfg.increment == 0 && cfg.force == 0 && cfg.update == 1)
+    if(cfg.increment == 0 && cfg.force == 0 && cfg.update == 1)
 	{
 	    fprintf(stderr, "-u not permitted without -i or -f\n");
 	    usage();
@@ -479,9 +479,8 @@ int main(int argc, char **argv)
         }
 
         // generate some feedback for the user
-        // in this case we tell the user what the serial number generated
-        // is so it can be noted and maybe put on a sticker somewhere
-        // fprintf(userfile, "Serial Number: %s", serialnumber);
+        // in this case we tell the user what the serial number is generated
+        // so it can be noted and maybe put on a sticker somewhere
         fprintf(userfile, "%s\n", cfg.serialnumber);
         fclose(userfile);
 	}
