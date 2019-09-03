@@ -1,5 +1,6 @@
 /**************************************************************
 1.3 - Added End-Of-File record to the end of HEX file.
+      Added support for start address above 0xffff
 
 1.2 - Changed last_sequence_file file format from binary to ASCII.
       Old binary files can still be read.
@@ -292,19 +293,20 @@ int generate(FILE *outputfile, hex_cfg* cfg)
 
 void usage(void)
 {
-    fprintf(stderr,"HexSerial-%s, version %s, compiled at %s\n", VERSION_STRING, VERSION_STRING, __DATE__);
-	fprintf(stderr,"Usage: -a n -l f -h f -p f -t f -i -u -f n -? --help\n");
+    fprintf(stderr,"hexserial, version %s, compiled at %s\n", VERSION_STRING, __DATE__);
+	fprintf(stderr,"Usage: -a n -l f -h f -p s -t f -i -u -f n -? --help\n");
 	fprintf(stderr,"Options (all of them are optional):\n");
 	fprintf(stderr,"  -i     increment sequence number\n");
 	fprintf(stderr,"  -u     update last sequence file with forced value\n");
-	fprintf(stderr,"  -a n   serial string address in HEX file in HEX notation with 0x prefix\n");
+	fprintf(stderr,"  -a n   set serial string address in HEX file to n\n");
 	fprintf(stderr,"  -f n   force sequence number to n\n");
 	fprintf(stderr,"  -l f   last sequence file f\n");
 	fprintf(stderr,"  -h f   output hex file f\n");
 	fprintf(stderr,"  -t f   output text file f\n");
-	fprintf(stderr,"  -p f   serial prefix\n");
+	fprintf(stderr,"  -p s   set serial prefix s\n");
 	fprintf(stderr,"  -?     this help\n");
 	fprintf(stderr,"  --help this help\n");
+	fprintf(stderr,"All numeric options can be decimal or hexadecimal (with 0x prefix\n");
 	fprintf(stderr,"Permitted combinations for -i -f -u operations:\n");
 	fprintf(stderr,"  ifu\n");
 	fprintf(stderr,"  000: re-make last serial\n");
@@ -380,7 +382,7 @@ int main(int argc, char **argv)
 				{
 				    sscanf(argv[i],"-a%d",(unsigned int*)&cfg.address);
 				}
-				else if(i + 1 < argc && argv[i + 1][0] != '-') // -a <file>
+				else if(i + 1 < argc && argv[i + 1][0] != '-') // -a <addr>
 				{
 				    if(strncmp(argv[i + 1], "0x", 2) == 0)
                         sscanf(argv[i + 1],"0x%x",(unsigned int*)&cfg.address);
