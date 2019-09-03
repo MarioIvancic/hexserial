@@ -178,7 +178,7 @@ int get_sequence_number(char* last_serial_file)
 int set_sequence_number(char* last_serial_file, int old_value, int new_value)
 {
     FILE *fp;
-    int size, v;
+    int size;
     char bkp_file_name[MAX_PATH];
 
     if(!last_serial_file) return -1;
@@ -223,7 +223,7 @@ int set_sequence_number(char* last_serial_file, int old_value, int new_value)
 // outputfile = handle of file to write hex record
 int generate(FILE *outputfile, hex_cfg* cfg)
 {
-	char hexrecord[MAX_SERIAL_SIZE * 3 + 20];
+	char hexrecord[MAX_SERIAL_SIZE * 2 + 200];
 	struct tm* timedate;
 	int old_seq, new_seq;
 	time_t now;
@@ -284,9 +284,6 @@ int generate(FILE *outputfile, hex_cfg* cfg)
 
         // output the hex record
         fprintf(outputfile, "%s\n", hexrecord);
-
-        // write end of file record
-        fprintf(outputfile, ":00000001FF\n");
 	}
 
 	return 0; // OK

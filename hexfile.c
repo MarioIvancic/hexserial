@@ -59,7 +59,7 @@ unsigned char hex_calculate_value(unsigned char high, unsigned char low)
 // returns: checksum
 unsigned char hexfile_calculate_checksum(unsigned char *buffer, int bytes)
 {
-	long checksum = 0;
+	int checksum = 0;
 	int i;
 
 	for (i = 1; i < bytes; i+=2)
@@ -72,32 +72,107 @@ unsigned char hexfile_calculate_checksum(unsigned char *buffer, int bytes)
 	return (unsigned char) checksum;
 }
 
+
+// write Extended Linear Address (type 04) record to output buffer
+// and return number of bytes written including line terminating characters
+unsigned make_type04(unsigned addr, char* outbuff)
+{
+    unsigned off = 0;
+    int t = sprintf(outbuff, ":02000004%04X", addr >> 16);
+    if(t <= 0) return 0;
+    off = t;
+    unsigned char checksum = hexfile_calculate_checksum(outbuff, off);
+    t = sprintf(outbuff + off, "%02X\n", checksum);
+    if(t <= 0) return 0;
+	off += t;
+	return off;
+}
+
+
+// write Data (type 00) record to output buffer
+// and return number of bytes written including line terminating characters
+unsigned make_type00(unsigned addr, int bytes, unsigned char *inbuff, char *outbuff)
+{
+    unsigned off = 0;
+
+    // write header for type 00
+    int t = sprintf(outbuff, ":%02X%04X00", bytes, addr & 0xffff);
+    if(t <= 0) return 0;
+    off = t;
+    int i;
+    for(i = 0; i < bytes; i++)
+    {
+        t = sprintf(outbuff + off, "%02X", inbuff[i]);
+        if(t <= 0) return 0;
+        off += t;
+    }
+    unsigned char checksum = hexfile_calculate_checksum(outbuff, off);
+    t = sprintf(outbuff + off, "%02X\n", checksum);
+    if(t <= 0) return 0;
+	off += t;
+	return off;
+}
+
+
+// write End Of File (type 01) record to output buffer
+// and return number of bytes written including line terminating characters
+unsigned make_type01(char* outbuff)
+{
+    unsigned off = 0;
+    int t = sprintf(outbuff, ":00000001FF\n");
+    if(t <= 0) return 0;
+    off = t;
+    return off;
+}
+
+
+
 // func: hexfile_generate_record
 // desc: converts raw data in inbuffer into a hex record in outbuffer
 // passed: starting address for record, number of bytes in record, input and output buffers
 // returns: nothing
+// Note: if addr is <= 0xffff only Data record is generated (type 00)
+// Note: if addr is > 0xffff Extended Linear Address (type 04) is generated before Data record (type 00)
+// Note: in the worst case outbuffer must have size of 83 + 2 * N bytes for N bytes in inbuffer, so
+// for 64 byte inbuffer we need 211 bytes
 void hexfile_generate_record(unsigned int addr, int bytes, unsigned char *inbuffer, char *outbuffer)
 {
-	int byte;
-	unsigned char checksum;
+	unsigned offset = 0;
 
-	outbuffer[0] = ':';
-	outbuffer[1] = hex_highchar((unsigned char)bytes);
-	outbuffer[2] = hex_lowchar((unsigned char)bytes);
-	outbuffer[3] = hex_char16(addr, 0);
-	outbuffer[4] = hex_char16(addr, 1);
-	outbuffer[5] = hex_char16(addr, 2);
-	outbuffer[6] = hex_char16(addr, 3);
-	outbuffer[7] = '0';
-	outbuffer[8] = '0';
+	// if start address is above 64KB we have to use extended address records
+	if(addr > 0xffff)
+    {
+        offset = make_type04(addr, outbuffer);
+    }
 
-	for (byte = 0; byte < bytes; byte++)
-	{
-		outbuffer[9 + (byte * 2)] = hex_highchar(inbuffer[byte]);
-		outbuffer[10 + (byte * 2)] = hex_lowchar(inbuffer[byte]);
-	}
-	checksum = hexfile_calculate_checksum(outbuffer, 9 + (bytes * 2));
-	outbuffer[9 + (bytes * 2)] = hex_highchar(checksum);
-	outbuffer[10 + (bytes * 2)] = hex_lowchar(checksum);
-	outbuffer[11 + (bytes * 2)] = 0;
+	while(bytes > 0)
+    {
+        // calculate length of the next chunk of data
+        // up to 16 bytes and to the next 64KB crossing
+        unsigned chunk = 0x10000U - (addr & 0xffffU);
+        if(chunk > bytes) chunk = bytes;
+        if(chunk > 16) chunk = 16;
+
+        // write chunk of data as type 00 (Data) record
+        unsigned t = make_type00(addr, chunk, inbuffer, outbuffer + offset);
+        if(!t) break;
+        offset += t;
+        inbuffer += chunk;
+        bytes -= chunk;
+        addr += chunk;
+
+        // if we have more data to process and we are at 64KB border we have to write record type 04
+        if(bytes && !(addr & 0xffff))
+        {
+            t = make_type04(addr, outbuffer + offset);
+            if(!t) break;
+            offset += t;
+        }
+    }
+
+    if(!bytes)
+    {
+        // if everything is OK we will finish with End Of File record (type 01)
+        make_type01(outbuffer + offset);
+    }
 }
