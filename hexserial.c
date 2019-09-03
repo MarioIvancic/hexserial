@@ -282,6 +282,9 @@ int generate(FILE *outputfile, hex_cfg* cfg)
 
         // output the hex record
         fprintf(outputfile, "%s\n", hexrecord);
+
+        // write end of file record
+        fprintf(outputfile, ":00000001FF\n");
 	}
 
 	return 0; // OK
