@@ -1,4 +1,6 @@
 /**************************************************************
+1.3 - Added End-Of-File record to the end of HEX file.
+
 1.2 - Changed last_sequence_file file format from binary to ASCII.
       Old binary files can still be read.
 
@@ -62,7 +64,7 @@ nezavisni su za svaki prefix.
 
 **************************************************************/
 
-#define VERSION_STRING "1.2"
+#define VERSION_STRING "1.3"
 
 // include needed header files
 #include <stdio.h>
